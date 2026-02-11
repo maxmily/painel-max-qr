@@ -6,8 +6,11 @@ import base64
 
 app = Flask(__name__)
 
-# O IP do seu servidor de assinatura
+# O IP correto sem o caminho /sign
 URL_ASSINADOR = "http://35.241.41.66"
+
+# E na hora de fazer o post, use assim:
+resposta_servidor = requests.post(URL_ASSINADOR, data=payload_envio, timeout=10)
 
 @app.route('/')
 def index():
