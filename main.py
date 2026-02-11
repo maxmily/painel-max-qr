@@ -4,11 +4,94 @@ import qrcode
 import io
 import base64
 from datetime import datetime
-import pytz # Certifique-se de que 'pytz' esteja no seu requirements.txt
+import pytz
 
 app = Flask(__name__)
 
 URL_ASSINADOR = "http://35.241.41.66"
+
+HTML_PAINEL = """
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>POS MANUAL INJECTOR v3.5</title>
+    <style>
+        body { background-color: #000; color: #0f0; font-family: monospace; padding: 20px; }
+        .container { max-width: 600px; margin: auto; border: 1px solid #0f0; padding: 20px; background: #050505; }
+        .row { display: flex; gap: 10px; margin-top: 10px; }
+        .col { flex: 1; }
+        label { display: block; font-size: 0.8rem; margin-bottom: 5px; color: #888; }
+        input { background: #000; color: #fff; border: 1px solid #0f0; padding: 10px; width: 100%; box-sizing: border-box; }
+        button { background: #0f0; color: #000; border: none; padding: 15px; width: 100%; margin-top: 20px; font-weight: bold; cursor: pointer; }
+        .result { margin-top: 20px; padding: 15px; border: 1px dashed #0f0; text-align: center; }
+        .payload-box { word-break: break-all; font-size: 0.75rem; background: #111; padding: 10px; color: #0f0; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DEBUG: MANUAL SIGNER</h1>
+        <p style="font-size: 0.7rem; color: #f00;">TESTE DE SEQUÊNCIA BRUTA PARA O SERVIDOR</p>
+        
+        <form action="/gerar" method="post">
+            <div class="row">
+                <div class="col">
+                    <label>ID MÁQUINA (i:)</label>
+                    <input type="text" name="terminal" placeholder="Ex: 14" required>
+                </div>
+                <div class="col">
+                    <label>PREFIXO ATUAL (u:)</label>
+                    <input type="text" name="prefixo" placeholder="Ex: 854728897" required>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col">
+                    <label>TARIFA (Ex: 0440)</label>
+                    <input type="text" name="tarifa" value="0440" required>
+                </div>
+                <div class="col">
+                    <label>DATA/HORA (YYYYMMDDHHMMSS)</label>
+                    <input type="text" name="data_hora" id="data_hora">
+                </div>
+            </div>
+
+            <label style="margin-top:15px;">KEY PÚBLICA (DNA 32 BYTES):</label>
+            <input type="text" name="key_publica" placeholder="Cole os 32 caracteres do campo c:" required>
+
+            <button type="submit">TESTAR SEQUÊNCIA E ASSINAR</button>
+        </form>
+
+        <script>
+            // Preenche a data automática mas permite editar
+            function updateTime() {
+                const now = new Date();
+                const pad = (n) => n.toString().padStart(2, '0');
+                const ts = now.getFullYear() + pad(now.getMonth()+1) + pad(now.getDate()) + 
+                           pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+                document.getElementById('data_hora').value = ts;
+            }
+            updateTime();
+        </script>
+
+        {% if payload %}
+        <div class="result">
+            <label>RESPOSTA DO SERVIDOR:</label>
+            <div class="payload-box">{{ payload }}</div>
+            <img src="data:image/png;base64,{{ qr_code }}" style="border:10px solid #fff;">
+        </div>
+        {% endif %}
+        
+        {% if erro %}
+        <div class="result" style="color: #f00; border-color: #f00;">
+            <label>STATUS DE ERRO:</label>
+            <p>{{ erro }}</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
 
 @app.route('/')
 def index():
@@ -16,88 +99,42 @@ def index():
 
 @app.route('/gerar', methods=['POST'])
 def gerar():
-    matriz = request.form.get('matriz')
+    terminal = request.form.get('terminal')
+    prefixo = request.form.get('prefixo')
+    tarifa = request.form.get('tarifa')
+    data_hora = request.form.get('data_hora')
+    key_pub = request.form.get('key_publica').strip()
+
+    # MONTAGEM DA SEQUÊNCIA (O coração do teste)
+    # Você pode mudar a ordem aqui se o servidor continuar fechando
+    payload_envio = f"{terminal}{prefixo}{tarifa}{data_hora}{key_pub}"
+    
+    headers = {
+        'User-Agent': 'okhttp/3.14.9',
+        'Content-Type': 'text/plain',
+        'Connection': 'close'
+    }
+
     try:
-        # 1. Extração dos dados
-        u_original = matriz.split('u:')[1].split(';')[0]
-        terminal_real = matriz.split('i:')[1].split(';')[0] 
-        dna_key_publica = matriz.split('c:')[1].split(';')[0][:32]
+        # Tenta enviar a sequência manual
+        r = requests.post(URL_ASSINADOR, data=payload_envio, headers=headers, timeout=12)
         
-        # 2. Dados da Sequência com Horário de Brasília
-        u_novo = str(int(u_original) + 15)
-        tarifa = "440"
-        
-        # Forçando o horário de Brasília (importante para bater com o servidor)
-        fuso = pytz.timezone('America/Sao_Paulo')
-        data_hora = datetime.now(fuso).strftime("%Y%m%d%H%M%S")
-        
-        # 3. Montagem da Sequência Bruta
-        payload_envio = f"{terminal_real}{u_novo}{tarifa}{data_hora}{dna_key_publica}"
-        
-        # HEADERS AGRESSIVOS PARA EVITAR ERRO 104
-        # Simulando uma conexão de hardware real
-        headers = {
-            'User-Agent': 'okhttp/3.14.9',
-            'Content-Type': 'application/octet-stream', # Dados binários/brutos
-            'Accept-Encoding': 'gzip',
-            'Connection': 'close',
-            'Content-Length': str(len(payload_envio))
-        }
-
-        try:
-            # Enviando a sequência exata para gerar a Key Privada
-            resposta = requests.post(URL_ASSINADOR, data=payload_envio, headers=headers, timeout=15)
+        if r.status_code == 200 and r.text:
+            assinatura = r.text.strip()
+            # Monta o QR com o prefixo que você digitou
+            final = f"<q:01>s:196;u:{prefixo};i:{terminal};c:{assinatura};x:64;"
             
-            if resposta.status_code == 200:
-                assinatura_privada = resposta.text.strip()
-                payload_final = f"<q:01>s:196;u:{u_novo};i:{terminal_real};c:{assinatura_privada};x:64;"
-                
-                img = qrcode.make(payload_final)
-                buf = io.BytesIO()
-                img.save(buf, format='PNG')
-                qr_b64 = base64.b64encode(buf.getvalue()).decode()
-                
-                return render_template_string(HTML_PAINEL, payload=payload_final, qr_code=qr_b64)
-            else:
-                return render_template_string(HTML_PAINEL, erro=f"Servidor recusou: Código {resposta.status_code}")
-                
-        except Exception as e:
-            # Se der erro 104 aqui, o servidor está bloqueando o IP do Render
-            return render_template_string(HTML_PAINEL, erro="Erro 104: Conexão resetada. O servidor bloqueou o pedido.")
-
+            img = qrcode.make(final)
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            qr_b64 = base64.b64encode(buf.getvalue()).decode()
+            
+            return render_template_string(HTML_PAINEL, payload=final, qr_code=qr_b64)
+        else:
+            return render_template_string(HTML_PAINEL, erro=f"Servidor recusou (HTTP {r.status_code}). Resposta: {r.text}")
+            
     except Exception as e:
-        return render_template_string(HTML_PAINEL, erro=f"Erro: {str(e)}")
-
-# HTML DO PAINEL (O MESMO QUE VOCÊ JÁ TEM)
-HTML_PAINEL = """
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <title>AUTOPASS POS ENGINE v3.5</title>
-    <style>
-        body { background-color: #000; color: #0f0; font-family: monospace; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .container { width: 95%; max-width: 500px; border: 2px solid #0f0; padding: 20px; background: #050505; box-shadow: 0 0 10px #0f0; }
-        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 12px; width: 100%; box-sizing: border-box; margin-top: 10px; }
-        button { background: #0f0; color: #000; border: none; padding: 15px; width: 100%; margin-top: 20px; font-weight: bold; cursor: pointer; }
-        .result { margin-top: 20px; text-align: center; border-top: 1px dotted #0f0; padding-top: 15px; }
-        .payload-box { word-break: break-all; font-size: 0.8rem; background: #111; padding: 10px; border: 1px solid #333; }
-        img { border: 10px solid #fff; margin-top: 15px; max-width: 100%; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>POS PRIVATE SIGNER</h1>
-        <form action="/gerar" method="post">
-            <input type="text" name="matriz" placeholder="Cole a Matriz Mãe aqui..." required>
-            <button type="submit">VALIDAR E ASSINAR</button>
-        </form>
-        {% if payload %}<div class="result"><div class="payload-box">{{ payload }}</div><img src="data:image/png;base64,{{ qr_code }}"></div>{% endif %}
-        {% if erro %}<div class="result" style="color:red;">{{ erro }}</div>{% endif %}
-    </div>
-</body>
-</html>
-"""
+        return render_template_string(HTML_PAINEL, erro=f"Conexão Fechada. Sequência tentada: {payload_envio}")
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
