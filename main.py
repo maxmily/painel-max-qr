@@ -7,7 +7,7 @@ import base64
 app = Flask(__name__)
 
 # O IP do seu servidor de assinatura
-URL_ASSINADOR = "35.241.41.66"
+URL_ASSINADOR = "http://35.241.41.66"
 
 @app.route('/')
 def index():
