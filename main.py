@@ -8,7 +8,7 @@ import time
 app = Flask(__name__)
 
 # ENDPOINT DO SERVIDOR ASSINADOR
-IP_SERVIDOR = "http://35.241.41.66/"
+IP_SERVIDOR = "http://35.241.41.66/8080"
 
 HTML_PAINEL = """
 <!DOCTYPE html>
