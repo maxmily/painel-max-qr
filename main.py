@@ -8,7 +8,7 @@ import time
 app = Flask(__name__)
 
 # ENDPOINT DO SERVIDOR ASSINADOR
-IP_SERVIDOR = "35.241.41.66/443"
+IP_SERVIDOR = "35.241.41.66/"
 
 HTML_PAINEL = """
 <!DOCTYPE html>
@@ -79,21 +79,16 @@ HTML_PAINEL = """
 </html>
 """
 
-@app.route('/')
-def home():
-    return render_template_string(HTML_PAINEL)
-
 @app.route('/api/injetar', methods=['POST'])
 def api_injetar():
     data = request.json
     mtz = data['matriz']
     
     try:
-        # Extração preservando os 64 caracteres da Key Pública HMAC (campo c:)
         terminal = mtz.split("i:")[1].split(";")[0]
         u_base = int(mtz.split("u:")[1].split(";")[0])
         key_hmac_publica = mtz.split("c:")[1].split(";")[0][:64]
-    except Exception as e:
+    except:
         return jsonify([])
 
     resultados = []
@@ -101,48 +96,39 @@ def api_injetar():
     for i in range(data['qtd']):
         u_novo = u_base + ((i + 1) * 15)
         ts = int(time.time())
-        tarifa = "540" # Tarifa fixada conforme pedido
         
-        # SEQUÊNCIA BRUTA POS: Terminal + Key Pública + Salto + Tarifa + Time
-        payload_envio = f"{terminal}{key_hmac_publica}{u_novo}{tarifa}{ts}"
+        # SEQUÊNCIA BRUTA: Vamos tentar enviar os dados como bytes
+        # O servidor pode estar esperando o formato: TERMINAL + KEY + DADOS
+        # Aqui convertemos a KEY para bytes se ela for Hex, ou enviamos bruta
+        payload_envio = f"{terminal}{key_hmac_publica}{u_novo}540{ts}".encode('utf-8')
         
-        # Headers para simular um pacote de dados de máquina real
         headers = {
-            'User-Agent': 'POS-Terminal/1.0',
+            'User-Agent': 'okhttp/3.14.9', # User-agent de Android/POS comum
             'Content-Type': 'application/octet-stream',
-            'Connection': 'close'
+            'Connection': 'close' # Força o fechamento para não dar o erro 104 no próximo
         }
         
         try:
-            r = requests.post(IP_SERVIDOR, data=payload_envio, headers=headers, timeout=8)
-            assinatura_privada = r.text.strip()
+            # Enviando como BYTES reais
+            r = requests.post(IP_SERVIDOR, data=payload_envio, headers=headers, timeout=10)
             
-            if r.status_code == 200 and assinatura_privada:
-                # Cálculo do X (checksum) do POS
+            if r.status_code == 200 and r.text:
+                assinatura_privada = r.text.strip()
                 semente = int(terminal) + u_novo + ts
                 x_calc = f"{(semente % 100):02d}"
                 
-                # MONTAGEM DO PAYLOAD FINAL: s:197, DNA preservado + Assinatura nova
                 payload_qr = f"<q:01>s:197;u:{u_novo};i:{terminal};c:{key_hmac_publica}{assinatura_privada};x:{x_calc};"
                 
-                qr = qrcode.QRCode(version=1, box_size=10, border=4)
-                qr.add_data(payload_qr)
-                qr.make(fit=True)
-                img = qr.make_image(fill_color="black", back_color="white")
-                
+                qr = qrcode.make(payload_qr)
                 buf = io.BytesIO()
-                img.save(buf, format='PNG')
+                qr_img.save(buf, format='PNG')
                 img_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
-                
                 resultados.append({"u": u_novo, "x": x_calc, "img": img_b64})
             else:
-                print(f"Servidor recusou salto {u_novo}. Status: {r.status_code}")
+                # Se o erro for 104, ele cai no 'except' abaixo
+                print(f"Erro do servidor: {r.status_code}")
         except Exception as e:
-            print(f"Erro no loop: {e}")
+            print(f"Conexão Resetada: {e}")
             continue
             
     return jsonify(resultados)
-
-if __name__ == '__main__':
-    # Porta 10000 para o Render
-    app.run(host='0.0.0.0', port=10000)
